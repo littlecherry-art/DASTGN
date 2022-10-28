@@ -53,12 +53,12 @@ class DataLoader:
         stds = np.std(X, axis=(0, 1))
         stds[stds <= 10e-5] = 10e-5  # Prevent infs
         X = X / stds.reshape(1, 1, -1)
-        Attr2 = np.concatenate((infect, X, time, interven), axis=2)
+        data = np.concatenate((infect, X, time, interven), axis=2)
 
         # Import adj
         A = pd.read_csv(self.adj_path).values
 
-        return A, Attr2
+        return A, data
 
 
     def generate_dataset(self, data):
@@ -91,8 +91,12 @@ class DataLoader:
             pred = data[i + self.num_timestamps: j, :, 0].transpose(1, 0)
             target.append(pred)
 
-        return torch.from_numpy(np.array(features)), \
-               torch.from_numpy(np.array(target))
+        # (number of samples, historical timestamps, number of regions, number of features)
+        feat_torch = torch.from_numpy(np.array(features))
+        # (number of samples, number of regions, pred_len)
+        target_torch = torch.from_numpy(np.array(target))
+
+        return feat_torch, target_torch
 
     def split_data(self):
         adj, X = self.load_data()
@@ -114,8 +118,8 @@ class DataLoader:
 """
 Evaluation functions
 """
-def evaluate(test_nodes, raw_features, labels, ESTGCN, regression, test_loss):
-    models = [ESTGCN, regression]
+def evaluate(test_nodes, raw_features, labels, DASTGN, regression, test_loss):
+    models = [DASTGN, regression]
 
     params = []
     for model in models:
@@ -125,7 +129,7 @@ def evaluate(test_nodes, raw_features, labels, ESTGCN, regression, test_loss):
                 params.append(param)
 
     val_nodes = test_nodes
-    embs = ESTGCN(raw_features)
+    embs = DASTGN(raw_features)
     predicts = regression(embs)
     loss_sup = torch.nn.MSELoss()(predicts, labels)
     loss_sup /= len(val_nodes)
@@ -138,25 +142,7 @@ def evaluate(test_nodes, raw_features, labels, ESTGCN, regression, test_loss):
 
 
 """
-Evaluation metrics
-"""
-def RMSELoss(yhat, y):
-    yhat = torch.FloatTensor(yhat)
-    y = torch.FloatTensor(y)
-    return torch.sqrt(torch.mean((yhat - y) ** 2)).item()
-
-
-
-def mae(y_true, y_pred):
-    # MAP
-    y_true = np.asarray(y_true)
-    y_pred = np.asarray(y_pred)
-
-    return np.mean(np.abs(y_true - y_pred))
-
-
-"""
-The space-time dependency structure used in USTGCN (only includes binary values)
+The binary spatio-temporal adjacency matrix used in USTGCN
 """
 def Static_full(n, t, A):
     """
@@ -178,7 +164,7 @@ def Static_full(n, t, A):
 
 
 """
-Use kronecker product to calculate the spatio-temporal adjacency matrix
+Use kronecker product to construct the spatio-temporal adjacency matrix
 """
 def kronecker(A, B):
     """

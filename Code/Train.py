@@ -5,6 +5,7 @@ import numpy as np
 from sklearn.metrics import mean_absolute_error
 import torch.nn as nn
 import torch.nn.functional as F
+import configparser
 
 from model import *
 from utils import *
@@ -16,7 +17,7 @@ class DiseaseModel:
 
     def __init__(self, train_data, train_label, val_data, val_label, test_data, test_label,
                  adj, input_size, out_size, GNN_layers, epochs, device, num_timestamps, pred_len,
-                 save_flag, PATH, t_debug, b_debug):
+                 save_flag, PATH, t_debug, b_debug, lr):
 
         super(DiseaseModel, self).__init__()
 
@@ -29,12 +30,12 @@ class DiseaseModel:
         self.input_size = input_size
         self.out_size = out_size
         self.GNN_layers = GNN_layers
-        self.day = input_size
         self.device = device
         self.epochs = epochs
         self.regression = Regression(input_size * num_timestamps, pred_len)
         self.num_timestamps = num_timestamps
         self.pred_len = pred_len
+        self.lr = lr
 
         self.node_bsz = 512
         self.PATH = PATH
@@ -54,7 +55,7 @@ class DiseaseModel:
 
     def run_model(self):
 
-        timeStampModel = SPTempGNN_block(self.input_size, self.out_size, self.adj,
+        timeStampModel = STGAT(self.input_size, self.out_size, self.adj,
                                      self.device, self.GNN_layers, self.num_timestamps)
         timeStampModel.to(self.device)
 
@@ -64,8 +65,8 @@ class DiseaseModel:
         self.best_val = float("Inf")
         self.best_epoch = float("Inf")
 
-        lr = 0.001
-        # lr = 0.003
+        self_lr = self.lr
+        lr = self_lr
 
         train_loss_his = []
         loss_idx = []
@@ -95,10 +96,6 @@ class DiseaseModel:
                     break
 
             train_loss /= len(idx)
-            # if epoch <= 24 and epoch % 8 == 0:
-            #     lr *= 0.5
-            # else:
-            #     lr = 0.0001
 
             print("Train avg loss: ", train_loss)
 
@@ -200,6 +197,26 @@ class DiseaseModel:
         print("Test MAE: ", MAE)
         print("===============================================")
 
+
+        pred = torch.FloatTensor(pred)
+        label = torch.FloatTensor(label)
+        mae = []
+        rmse = []
+        for t in range(self.pred_len):
+            yhat = pred[:, t]
+            y = label[:, t]
+
+            rmse_i = torch.nn.MSELoss()(yhat, y)
+            rmse_i = torch.sqrt(rmse_i).item()
+            mae_i = mean_absolute_error(yhat, y)
+
+            print("Horizon:", t+1, ", test rmse:", rmse_i, ", test mae:", mae_i)
+            mae.append(mae_i)
+            rmse.append(rmse_i)
+
+        print("===============================================")
+
+
         report = {"Best_epoch": self.best_epoch,
                   "Min_val_loss": self.best_val.item(),
                   "Ave_test_loss": test_loss.item(),
@@ -215,9 +232,9 @@ class DiseaseModel:
 """
 Applying Model
 """
-def apply_model(train_nodes, SPTempGNN_block, regression,
+def apply_model(train_nodes, STGAT, regression,
                 node_batch_sz, device, train_data, train_label, avg_loss, lr, pred_len):
-    models = [SPTempGNN_block, regression]
+    models = [STGAT, regression]
     params = []
     for model in models:
         for param in model.parameters():
@@ -241,7 +258,7 @@ def apply_model(train_nodes, SPTempGNN_block, regression,
         nodes_batch = nodes_batch.view(nodes_batch.shape[0], 1)
         labels_batch = labels[nodes_batch]
         labels_batch = labels_batch.view(len(labels_batch), pred_len)
-        embs_batch = SPTempGNN_block(raw_features)  # Finds embeddings for all the ndoes in nodes_batch
+        embs_batch = STGAT(raw_features)  # Finds embeddings for all the ndoes in nodes_batch
 
         logists = regression(embs_batch)
         loss_sup = torch.nn.MSELoss()(logists, labels_batch)
@@ -259,29 +276,40 @@ def apply_model(train_nodes, SPTempGNN_block, regression,
     for model in models:
         model.zero_grad()
 
-    return SPTempGNN_block, regression, avg_loss
+    return STGAT, regression, avg_loss
 
 
 """#Training"""
-parser = argparse.ArgumentParser(description='pytorch version of ESTGCN')
+
+DATASET = "../Data/Brazil/Brazil"
+
+config_file = './{}.conf'.format(DATASET)
+config = configparser.ConfigParser()
+config.read(config_file)
+
+
+parser = argparse.ArgumentParser(description='pytorch version of DASTGN')
 parser.add_argument('-f')
 
+parser.add_argument('--feature_path', type=str, default=config['data']['feature_path'], help='data path')
+parser.add_argument('--adj_path', type=str, default=config['data']['adj_path'], help='adjacency matrix')
+parser.add_argument('--save_path', type=str, default=config['data']['save_path'], help='save path')
 
-parser.add_argument('--feature_path', type=str, default='../../China/Province_feature')
-parser.add_argument('--adj_path', type=str, default='../../China/ChinaProvAdj.csv')
-parser.add_argument('--save_path', type=str, default='../../China/GitHub_test')
-parser.add_argument('--GNN_layers', type=int, default=2)
-parser.add_argument('--num_timestamps', type=int, default=14)
-parser.add_argument('--pred_len', type=int, default=7)
-parser.add_argument('--epochs', type=int, default=1000)
-parser.add_argument('--seed', type=int, default=42)
+parser.add_argument('--input_size', type=int, default=config['model']['input_size'], help='size of the input features')
+parser.add_argument('--out_size', type=int, default=config['model']['out_size'], help='size of the output features')
+parser.add_argument('--interven_start', type=int, default=config['model']['interven_start'], help='the time index of quarantine started')
+parser.add_argument('--interven_end', type=int, default=config['model']['interven_end'], help='the time index of quarantine ended')
+parser.add_argument('--num_timestamps', type=int, default=config['model']['num_timestamps'], help='number of historical timestamps')
+parser.add_argument('--pred_len', type=int, default=config['model']['pred_len'], help='number of future timestamps for prediction')
+parser.add_argument('--GNN_layers', type=int, default=config['model']['GNN_layers'], help='number of ST-GAT layers')
+
+parser.add_argument("--lr", type=float, default=config['train']['lr'], help="learning rate")
+parser.add_argument("--epochs", type=int, default=config['train']['epochs'], help="maximum epochs")
+parser.add_argument("--seed", type=int, default=config['train']['seed'], help="random seed")
+
 parser.add_argument('--cuda', action='store_true', help='use CUDA')
 parser.add_argument('--trained_model', action='store_true')
 parser.add_argument('--save_model', action='store_true', default=True)
-parser.add_argument('--input_size', type=int, default=3)
-parser.add_argument('--out_size', type=int, default=3)
-parser.add_argument('--interven_start', type=int, default=10)
-parser.add_argument('--interven_end', type=int, default=49)
 
 args = parser.parse_args()
 
@@ -293,7 +321,7 @@ print('DEVICE:', device)
 Main Function
 """
 
-print('Static COVID-19 Forecasting GNN with Historical and Current Model')
+print('COVID-19 Forecasting based on DASTGN')
 
 random.seed(args.seed)
 np.random.seed(args.seed)
@@ -310,7 +338,7 @@ t_debug = False
 b_debug = False
 hModel = DiseaseModel(train_data, train_label, val_data, val_label, test_data, test_label, adj, args.input_size,
                       args.out_size, args.GNN_layers, args.epochs, device, args.num_timestamps, args.pred_len, save_flag,
-                      args.save_path, t_debug, b_debug)
+                      args.save_path, t_debug, b_debug, args.lr)
 
 
 hModel.run_model()            # train model and evaluate

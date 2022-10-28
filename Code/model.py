@@ -1,14 +1,14 @@
-from CoarseModule import *
-from FineModule import *
+from coarse_module import *
+from fine_module import *
 
 
 '''
 Spatio-Temporal GNN
 '''
-class SPTempGNN_layer(nn.Module):
+class GConv(nn.Module):
 
     def __init__(self, D_temporal, A_temporal, tot_nodes, tw, fw):
-        super(SPTempGNN_layer, self).__init__()
+        super(GConv, self).__init__()
 
         self.tot_nodes = tot_nodes
         self.sp_temp = torch.mm(D_temporal, torch.mm(A_temporal, D_temporal))
@@ -27,10 +27,10 @@ class SPTempGNN_layer(nn.Module):
         return his_raw_features
 
 
-class SPTempGNN_block(nn.Module):
+class STGAT(nn.Module):
 
     def __init__(self, input_size, out_size, adj_lists, device, GNN_layers, num_timestamps):
-        super(SPTempGNN_block, self).__init__()
+        super(STGAT, self).__init__()
 
         self.num_timestamps = num_timestamps
         self.input_size = input_size
@@ -48,8 +48,8 @@ class SPTempGNN_block(nn.Module):
         # a trainable parameter of the time-decaying interventions after quarantine
         self.theta = nn.Parameter(torch.FloatTensor(1, 1))
 
-        self.Coarse_layer = Coarse_layer(self.tot_nodes, num_timestamps, input_size, adj_lists)
-        self.Fine_layer = MultiChannel_layer(input_size, adj_lists, num_timestamps)
+        self.Coarse_module = Coarse_module(self.tot_nodes, num_timestamps, input_size, adj_lists)
+        self.Fine_module = MultiEffectFusion(input_size, adj_lists, num_timestamps)
 
         self.init_params()
 
@@ -58,28 +58,27 @@ class SPTempGNN_block(nn.Module):
             if len(param.size()) == 2:
                 nn.init.xavier_uniform_(param)
 
-    def forward(self, attributes):     # dim(his_raw_features)=(T, S, F)
+    def forward(self, attributes):     # dim(his_raw_features)=(Time, Space, Feat)
         his_raw_features = attributes[:, :, :self.input_size]              # delete time and intervention variables
 
-        time_interval = attributes[:, :, self.input_size:(self.input_size+1)]
+        time_interval = attributes[:, :, self.input_size:(self.input_size+1)]    # construct a piece-wise function for intervention
         interven = attributes[:, :, (self.input_size+1):(self.input_size+2)]
         interven_decay = torch.sigmoid(-self.theta * time_interval)
         interven_adjust = torch.where(interven == 0.5, interven_decay, interven)
-        interven_adjust = interven_adjust.squeeze().view(self.dim, 1)
 
         for i in range(self.GNN_layers):
             his_raw_features = his_raw_features.contiguous().view(self.num_timestamps, self.tot_nodes, self.input_size)
 
-            coarse_matrix = self.Coarse_layer(his_raw_features, interven_adjust)            # NT * NT
-            fine_matrix = self.Fine_layer(his_raw_features)                                 # NT * NT
+            coarse_matrix = self.Coarse_module(his_raw_features, interven_adjust)            # NT * NT
+            fine_matrix = self.Fine_module(his_raw_features)                                 # NT * NT
 
             A_temporal = coarse_matrix * fine_matrix                                        # final ST weighted matrix
             D_temporal = Degree_Matrix(A_temporal)
 
             his_raw_features = his_raw_features.contiguous().view(-1, self.input_size)
 
-            sp_temp = SPTempGNN_layer(D_temporal, A_temporal, self.tot_nodes, self.his_temporal_weight, self.his_final_weight)
-            his_raw_features = sp_temp(his_raw_features)
+            GCN = GConv(D_temporal, A_temporal, self.tot_nodes, self.his_temporal_weight, self.his_final_weight)
+            his_raw_features = GCN(his_raw_features)
 
         his_list = []
 
