@@ -4,12 +4,12 @@ A PyTorch implementation of the Dynamic Adaptive Spatio-Temporal Graph Network (
 # Requirements
 The DASTGN model is implemented in Python 3.8.8 software.
 
-PyTorch    1.10.1
+PyTorch          1.10.1
 
-numpy      1.21.2
+numpy            1.21.2
 
-pandas     1.3.3
+pandas           1.3.3
 
-sklearn    0.24.2
+sklearn          0.24.2
 
 
