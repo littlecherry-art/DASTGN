@@ -137,14 +137,14 @@ class MultiEffectFusion(nn.Module):
     def forward(self, his_raw_features):     # dim(his_raw_features)=(timestamp, num_vertices, num_features)
         filter = Static_full(self.tot_nodes, self.num_timestamps, self.adj)
 
-        temporal_matrix = self.Time(his_raw_features)
-        temporal_gate = self.TW * temporal_matrix * filter
+        temporal_matrix = self.Time(his_raw_features) * filter
+        temporal_gate = self.TW * temporal_matrix
 
-        spatial_matrix = self.Space(his_raw_features)
-        spatial_gate = self.SW * spatial_matrix * filter
+        spatial_matrix = self.Space(his_raw_features) * filter
+        spatial_gate = self.SW * spatial_matrix
 
-        direct_matrix = self.Direct(his_raw_features)
-        direct_gate = self.DW * direct_matrix * filter
+        direct_matrix = self.Direct(his_raw_features) * filter
+        direct_gate = self.DW * direct_matrix
 
         gates = torch.cat((temporal_gate.unsqueeze(0), spatial_gate.unsqueeze(0), direct_gate.unsqueeze(0)), 0)
         gates = F.softmax(gates, dim=0)
